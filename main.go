@@ -1,50 +1,51 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
-	//"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gocolly/colly"
 )
 
-type vehicleDescription struct {
-	vdMilage    string
-	vdMPG       string
-	vdEngine    string
-	vdTrans     string
-	vdDriveLine string
-	vdExterior  string
-	vdInterior  string
-	vdStock     string
-}
-
-type vehicle struct {
+type Vehicle struct {
+	vAct   bool
 	vVin   string
 	vYear  string
 	vMake  string
 	vModel string
-	vTrim  string
-	vStock string
-	vDesc  vehicleDescription
-	//vCrawl time.Time
 }
 
 func main() {
-	vehicles := []vehicle{}
-	c := colly.NewCollector()
-
 	baseURL := "https://www.qualitynissansc.com/used-inventory/index.htm"
 
+	db, err := sql.Open("mysql", "bradTest:Newpassword1!@tcp(192.168.2.2:3306)/bradScrape_Developement")
+	if err != nil {
+		panic(err.Error())
+	}
+	defer db.Close()
+
+	err = db.Ping()
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	stmtIns, err := db.Prepare("INSERT INTO `Vehicles` (`VIN`, `YEAR`, `Make`, `Model`) VALUES (?,?,?,?)") //?? is placeholder for inserts
+	if err != nil {
+		panic(err.Error()) // proper error handling instead of panic in your app
+	}
+	defer stmtIns.Close()
+
+	Vehicles := []Vehicle{}
+	c := colly.NewCollector()
+
 	c.OnHTML("li.inv-type-used", func(e *colly.HTMLElement) {
-		temp := vehicle{}
+		temp := Vehicle{}
 		temp.vVin = e.ChildAttr("div[data-type=used]", "data-vin")
 		temp.vYear = e.ChildAttr("div[data-type=used]", "data-year")
 		temp.vMake = e.ChildAttr("div[data-type=used]", "data-make")
 		temp.vModel = e.ChildAttr("div[data-type=used]", "data-bodystyle")
-		temp.vTrim = e.ChildAttr("div[data-type=used]", "data-trim")
-		temp.vDesc.vdExterior = e.ChildText("Exterior Color")
-		//temp.vCrawl = time.Now()
-		vehicles = append(vehicles, temp)
+		Vehicles = append(Vehicles, temp)
 	})
 
 	c.OnRequest(func(r *colly.Request) {
@@ -59,7 +60,49 @@ func main() {
 
 	c.Visit(baseURL)
 
-	for i := 0; i < len(vehicles); i++ {
-		fmt.Println(i+1, "/", len(vehicles), "|\t", vehicles[i].vVin, vehicles[i].vDesc.vdExterior)
+	rows, err := db.Query("SELECT * FROM Vehicles")
+	if err != nil {
+		panic(err.Error())
+	}
+
+	columns, err := rows.Columns()
+	if err != nil {
+		panic(err.Error())
+	}
+
+	values := make([]sql.RawBytes, len(columns))
+	scanArgs := make([]interface{}, len(values))
+	for i := range values {
+		scanArgs[i] = &values[i]
+	}
+
+	count := 0
+	//get rows form sql db
+	for rows.Next() {
+		err := rows.Scan(scanArgs...)
+		if err != nil {
+			panic(err.Error())
+		}
+
+		var value string
+
+		for i, col := range values {
+			if col == nil {
+				value = "NULL"
+			} else {
+				value = string(col)
+				count++
+			}
+			fmt.Println("Found ", count, "in database", col[i], value)
+
+		}
+	}
+
+	for i := 0; i < len(Vehicles); i++ {
+		//fmt.Println(i+1, "/", len(Vehicles), "|\t", Vehicles[i].vVin)
+		_, err := stmtIns.Exec(Vehicles[i].vVin, Vehicles[i].vYear, Vehicles[i].vMake, Vehicles[i].vModel)
+		if err != nil {
+			panic(err.Error())
+		}
 	}
 }
